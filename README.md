@@ -1,81 +1,76 @@
 # Books API
 
-REST API для книг на FastAPI. Данные хранятся в памяти, после рестарта контейнера список очищается.
+Небольшой REST API для книг на FastAPI. Главное в этом репозитории — не сам сервис, а CI/CD: здесь собран полный путь от коммита до работающего контейнера в Docker Swarm.
 
-В проекте настроен CI/CD в GitLab: сборка Docker-образа, тесты, публикация в Docker Hub и деплой в Docker Swarm.
+Пайплайн живёт в GitLab CI, образы хранятся в Docker Hub, деплой идёт через `docker stack deploy`. Сервис намеренно простой, чтобы вся логика была в инфраструктуре, а не в коде.
 
-## Стек
+## Идея проекта
 
-Python 3.13, FastAPI, Pydantic, Uvicorn. Тесты — pytest и allure-pytest, линт — flake8. Docker, Docker Swarm, GitLab CI.
+Показать, как выглядит полный цикл доставки приложения:
 
-## Запуск локально
+- разработчик пушит коммит;
+- GitLab CI собирает Docker-образ;
+- тесты и линтер проверяют именно этот образ;
+- образ публикуется в Docker Hub с тегом по SHA коммита;
+- на ветке `main` обновляется стек в Docker Swarm;
+- отчёт Allure собирается и публикуется отдельным контейнером.
+
+Ветка `main` — это «прод», остальные ветки и merge request проходят только сборку и проверки.
+
+## CI/CD пайплайн
+
+Пайплайн описан в `.gitlab-ci.yml` и состоит из трёх стадий: `build` → `test` → `deploy`.
+
+### build
+
+Собирает образ из `Dockerfile` и пушит его в Docker Hub:
+
+- используется `docker:28` и `docker:28-dind` (docker-in-docker), поэтому нужен раннер с `privileged = true`;
+- тег — `books-api-$CI_COMMIT_SHORT_SHA`, то есть короткий SHA коммита; `latest` не используется, чтобы каждый образ был уникальным и можно было откатиться на предыдущий;
+- перед сборкой выполняется `docker login` с `DOCKER_REGISTRY_USER` и `DOCKER_REGISTRY_PASSWORD`.
+
+### test
+
+Три джобы, которые запускаются в уже собранном образе (`image: $DOCKER_IMAGE_TAG`), а не в отдельном окружении:
+
+- `unit-tests` — `pytest tests/unit --cov=src`, публикует JUnit-отчёт и процент покрытия в merge request;
+- `lint` — `flake8 src/`;
+- `allure-report` — ручная джоба: прогоняет тесты с Allure-шагами и генерирует HTML-отчёт в артефакты, хранится 1 день.
+
+Так как тесты идут в том же образе, проверяется ровно тот артефакт, который потом поедет на сервер.
+
+### deploy
+
+- `allure-deploy` — берёт готовый отчёт, собирает nginx-образ, пушит его в Docker Hub и деплоит отдельным стеком `allure-report-<branch>`; контекст сборки ограничен каталогом `allure-report`, чтобы не тащить в образ весь репозиторий;
+- `deploy` — запускается только для `main` и обновляет стек `books-api` на Swarm.
+
+Деплой выполняется командой:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+docker -H $DEPLOY_SERVER_ADDR stack deploy \
+  --with-registry-auth \
+  -c docker-swarm/stacks/api.yaml \
+  books-api
 ```
 
-Сервис будет доступен на `http://localhost:8000`, документация — на `/docs`.
-
-В Docker:
-
-```bash
-docker build -t books-api .
-docker run -p 8000:8000 books-api
-```
-
-## API
-
-- `GET /` — проверить, что сервис работает
-- `POST /books/` — создать книгу
-- `GET /books/` — список книг
-- `GET /books/{id}` — книга по id
-- `PUT /books/{id}` — обновить книгу
-- `DELETE /books/{id}` — удалить книгу
-
-```bash
-curl -X POST http://localhost:8000/books/ \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Clean Code", "author": "Robert Martin"}'
-```
-
-## Тесты
-
-```bash
-pytest
-pytest --cov=src
-pytest --alluredir=allure-results
-```
-
-## CI/CD
-
-Пайплайн описан в `.gitlab-ci.yml`, стадии `build` → `test` → `deploy`.
-
-- `build` — собирает образ и пушит в Docker Hub с тегом `books-api-<sha>`.
-- `unit-tests` — pytest с покрытием, отчёт в артефактах.
-- `lint` — flake8.
-- `allure-report` — ручная джоба, генерирует HTML-отчёт Allure.
-- `allure-deploy` — деплоит отчёт отдельным стеком в nginx.
-- `deploy` — деплоит стек `books-api`, только для ветки `main`.
-
-Собранные образы хранятся в Docker Hub, отдельный registry не используется.
-
-Тесты и линт идут внутри собранного образа, поэтому проверяется ровно тот образ, который потом деплоится. Раннеру нужен Docker executor с `privileged = true`.
+`--with-registry-auth` передаёт креды Docker Hub узлам Swarm, поэтому на worker-нодах не нужен отдельный `docker login`.
 
 ## Переменные CI/CD
 
-Задаются в GitLab: Settings → CI/CD → Variables.
+Все значения задаются в GitLab: Settings → CI/CD → Variables. В репозитории их нет.
 
-- `DOCKER_REGISTRY` — адрес registry, `docker.io`
-- `DOCKER_REPOSITORY` — репозиторий, например `lizoksorokina/books-api`
-- `DOCKER_REGISTRY_USER` — логин Docker Hub
-- `DOCKER_REGISTRY_PASSWORD` — токен с правами Read & Write
-- `DOCKER_AUTH_CONFIG` — JSON для авторизации раннера, чтобы тянуть приватный образ
-- `DEPLOY_SERVER_ADDR` — адрес manager-ноды Swarm, например `ssh://deploy@10.0.0.5`
+- `DOCKER_REGISTRY` — адрес registry. Для Docker Hub это `docker.io` без `https://`, потому что значение подставляется прямо в имя образа.
+- `DOCKER_REPOSITORY` — репозиторий внутри registry, например `lizoksorokina/books-api`.
+- `DOCKER_REGISTRY_USER` — логин Docker Hub.
+- `DOCKER_REGISTRY_PASSWORD` — пароль или personal access token. Лучше токен с правами Read & Write: его можно отозвать, не меняя пароль.
+- `DOCKER_AUTH_CONFIG` — JSON с авторизацией для GitLab Runner. Нужен, чтобы раннер мог скачать приватный образ до запуска джобы.
+- `DEPLOY_SERVER_ADDR` — адрес manager-ноды Swarm, например `ssh://deploy@10.0.0.5` или `tcp://10.0.0.5:2376`.
 
-`DOCKER_AUTH_CONFIG` — это обычный `~/.docker/config.json`:
+`DOCKER_IMAGE_TAG` и `ALLURE_IMAGE_TAG` отдельно задавать не нужно — они собираются в `.gitlab-ci.yml` из registry, repository и SHA коммита.
+
+### DOCKER_AUTH_CONFIG
+
+Это обычный `~/.docker/config.json`, только в виде переменной:
 
 ```json
 {
@@ -87,21 +82,85 @@ pytest --alluredir=allure-results
 }
 ```
 
-Base64 для `auth` получается командой:
+Поле `auth` — это Base64-строка `username:token`. Получить её:
 
 ```bash
 echo -n "<username>:<token>" | base64
 ```
 
-Токен создаётся в Docker Hub: Account Settings → Security → New Access Token.
+В PowerShell:
 
-## Деплой
-
-```bash
-docker -H $DEPLOY_SERVER_ADDR stack deploy \
-  --with-registry-auth \
-  -c docker-swarm/stacks/api.yaml \
-  books-api
+```powershell
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("<username>:<token>"))
 ```
 
-`--with-registry-auth` передаёт креды Docker Hub узлам Swarm.
+Токен создаётся в Docker Hub: Account Settings → Security → New Access Token, права Read & Write.
+
+Важно не путать: `docker login` в пайплайне нужен для push, а `DOCKER_AUTH_CONFIG` — для pull образа самим раннером. Если репозиторий приватный, без неё джобы `test` не смогут скачать образ и упадут с `unauthorized`.
+
+## Что используем
+
+- **Python 3.13** и **FastAPI** — сам сервис, данные в памяти;
+- **Pydantic** — схемы запросов и ответов;
+- **pytest**, **pytest-cov**, **allure-pytest** — тесты и отчёты;
+- **flake8** — линтер;
+- **Docker 28** и docker-in-docker — сборка образов в CI;
+- **Docker Hub** — хранение образов;
+- **Docker Swarm** — деплой;
+- **GitLab CI** — пайплайн.
+
+## API
+
+- `GET /` — проверка, что сервис жив;
+- `POST /books/` — создать книгу;
+- `GET /books/` — список книг;
+- `GET /books/{id}` — книга по id;
+- `PUT /books/{id}` — обновить книгу;
+- `DELETE /books/{id}` — удалить книгу.
+
+Создание книги:
+
+```bash
+curl -X POST http://localhost:8000/books/ \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Clean Code", "author": "Robert Martin"}'
+```
+
+## Запуск локально
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Сервис будет на `http://localhost:8000`, Swagger — на `/docs`.
+
+В Docker:
+
+```bash
+docker build -t books-api .
+docker run -p 8000:8000 books-api
+```
+
+## Тесты
+
+```bash
+pytest
+pytest --cov=src
+pytest --alluredir=allure-results
+```
+
+## Структура
+
+```text
+.
+├── .gitlab-ci.yml          # пайплайн
+├── Dockerfile              # образ сервиса
+├── docker-swarm/stacks/    # api.yaml и allure-report.yaml
+├── ci/allure/              # nginx-образ для отчёта
+├── src/                    # код сервиса
+├── tests/                  # unit и allure тесты
+└── requirements.txt
+```
