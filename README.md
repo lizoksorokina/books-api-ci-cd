@@ -1,8 +1,8 @@
-# Books API
+# Books API - CI CD
 
-Небольшой REST API для книг на FastAPI. Главное в этом репозитории — не сам сервис, а CI/CD: здесь собран полный путь от коммита до работающего контейнера в Docker Swarm.
+REST API для книг на FastAPI. CI/CD: здесь собран полный путь от коммита до работающего контейнера в Docker Swarm.
 
-Пайплайн живёт в GitLab CI, образы хранятся в Docker Hub, деплой идёт через `docker stack deploy`. Сервис намеренно простой, чтобы вся логика была в инфраструктуре, а не в коде.
+Пайплайн живёт в GitLab CI, образы хранятся в Docker Hub, деплой идёт через `docker stack deploy`. 
 
 ## Идея проекта
 
@@ -14,8 +14,6 @@
 - образ публикуется в Docker Hub с тегом по SHA коммита;
 - на ветке `main` обновляется стек в Docker Swarm;
 - отчёт Allure собирается и публикуется отдельным контейнером.
-
-Ветка `main` — это «прод», остальные ветки и merge request проходят только сборку и проверки.
 
 ## CI/CD пайплайн
 
@@ -66,7 +64,6 @@ docker -H $DEPLOY_SERVER_ADDR stack deploy \
 - `DOCKER_AUTH_CONFIG` — JSON с авторизацией для GitLab Runner. Нужен, чтобы раннер мог скачать приватный образ до запуска джобы.
 - `DEPLOY_SERVER_ADDR` — адрес manager-ноды Swarm, например `ssh://deploy@10.0.0.5` или `tcp://10.0.0.5:2376`.
 
-`DOCKER_IMAGE_TAG` и `ALLURE_IMAGE_TAG` отдельно задавать не нужно — они собираются в `.gitlab-ci.yml` из registry, repository и SHA коммита.
 
 ### DOCKER_AUTH_CONFIG
 
@@ -88,15 +85,8 @@ docker -H $DEPLOY_SERVER_ADDR stack deploy \
 echo -n "<username>:<token>" | base64
 ```
 
-В PowerShell:
-
-```powershell
-[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("<username>:<token>"))
-```
-
 Токен создаётся в Docker Hub: Account Settings → Security → New Access Token, права Read & Write.
 
-Важно не путать: `docker login` в пайплайне нужен для push, а `DOCKER_AUTH_CONFIG` — для pull образа самим раннером. Если репозиторий приватный, без неё джобы `test` не смогут скачать образ и упадут с `unauthorized`.
 
 ## Что используем
 
