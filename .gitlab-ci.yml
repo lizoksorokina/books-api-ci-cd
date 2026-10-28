@@ -25,4 +25,7 @@ unit-tests:
   stage: test
   image: $DOCKER_IMAGE_TAG
   script:
-    - pytest -vv tests/unit
+    - pytest -vv tests/unit --junitxml=report.xml
+  artifacts:
+    reports:
+      junit: report.xml
