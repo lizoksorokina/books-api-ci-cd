@@ -50,3 +50,25 @@ allure-report:
     expire_in: 1 day
     paths:
       - allure-report
+
+allure-deploy:
+  stage: deploy
+  image: docker:28
+  needs:
+    - allure-report
+  dependencies:
+    - allure-report
+  services:
+    - name: docker:28-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    STACKS_DIRECTORY: ./docker-swarm/stacks
+    ALLURE_IMAGE_TAG: $DOCKER_REGISTRY/$DOCKER_REPOSITORY:allure-report-$CI_COMMIT_SHORT_SHA
+  before_script:
+    - echo $DOCKER_REGISTRY_PASSWORD | docker login -u $DOCKER_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+  script:
+    - docker build -t $ALLURE_IMAGE_TAG -f ci/allure/Dockerfile .
+    - docker push $ALLURE_IMAGE_TAG
+    - docker -H $DEPLOY_SERVER_ADDR stack deploy --with-registry-auth -c $STACKS_DIRECTORY/allure-report.yaml allure-report-$CI_COMMIT_REF_SLUG
