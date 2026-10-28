@@ -1,0 +1,5 @@
+services:
+  allure-report:
+    image: $ALLURE_IMAGE_TAG
+    ports:
+      - "8080:80"
