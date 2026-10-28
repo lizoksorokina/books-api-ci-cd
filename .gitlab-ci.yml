@@ -24,8 +24,29 @@ build:
 unit-tests:
   stage: test
   image: $DOCKER_IMAGE_TAG
+  coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   script:
-    - pytest -vv tests/unit --junitxml=report.xml
+    - pytest -vv tests/unit --junitxml=report.xml --cov=src
   artifacts:
     reports:
       junit: report.xml
+
+lint:
+  stage: test
+  image: $DOCKER_IMAGE_TAG
+  before_script:
+    - flake8 --version
+  script:
+    - flake8 --show-source --statistics src/
+
+allure-report:
+  stage: test
+  image: $DOCKER_IMAGE_TAG
+  when: manual
+  script:
+    - pytest -vv --alluredir=allure-results tests/allure
+    - allure generate -c allure-results -o allure-report
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - allure-report
