@@ -72,3 +72,18 @@ allure-deploy:
     - docker build -t $ALLURE_IMAGE_TAG -f ci/allure/Dockerfile .
     - docker push $ALLURE_IMAGE_TAG
     - docker -H $DEPLOY_SERVER_ADDR stack deploy --with-registry-auth -c $STACKS_DIRECTORY/allure-report.yaml allure-report-$CI_COMMIT_REF_SLUG
+
+.rules:
+  main:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+deploy:
+  stage: deploy
+  image: docker:28
+  rules: !reference [.rules, main]
+  variables:
+    STACKS_DIRECTORY: ./docker-swarm/stacks
+  before_script:
+    - echo $DOCKER_REGISTRY_PASSWORD | docker login -u $DOCKER_REGISTRY_USER --password-stdin $DOCKER_REGISTRY
+  script:
+    - docker -H $DEPLOY_SERVER_ADDR stack deploy --with-registry-auth -c $STACKS_DIRECTORY/api.yaml books-api
